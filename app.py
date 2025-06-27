@@ -1,3 +1,4 @@
+!pip install PyPDF2 openpyxl pandas
 import streamlit as st
 import pandas as pd
 import re
