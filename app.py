@@ -22,7 +22,7 @@ if uploaded_files:
             label, ["Applicant", "Co-Applicant"], key=uploaded_file.name
         )
 
-    if st.button("🔍 Parse & Generate Excel"):
+    if st.button("Parse & Generate Excel"):
         output = BytesIO()
         writer = pd.ExcelWriter(output, engine="openpyxl")
         summary_rows = []
