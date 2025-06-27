@@ -5,7 +5,7 @@ from PyPDF2 import PdfReader
 from io import BytesIO
 
 st.set_page_config(page_title="PDF Loan Parser", layout="centered")
-st.title("📄 PDF Credit Report Parser (Colab)")
+st.title("Personal CIBIL to CAM converter")
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDF credit reports",
@@ -85,7 +85,9 @@ if uploaded_files:
                 last_12_entry = dpd_values_entry[:12]
                 max_12_months_entry = max([val for val, _ in last_12_entry], default=0)
                 max_36_months_entry = max([val for val, _ in dpd_values_entry], default=0)
-
+                summary_df = pd.DataFrame(summary_rows)
+                summary_df.to_excel(writer, index=False, sheet_name="Summary")
+                writer._save()
                 def parse_loan_data(data_str, customer_name):
                     patterns = {
                         'ACCOUNT NUMBER': r'ACCOUNT NUMBER:\s*(.+)',
@@ -146,13 +148,10 @@ if uploaded_files:
             sheet_name = f"{customer_name}_{app_type}"[:31]
             current_pdf_df.to_excel(writer, index=False, sheet_name=sheet_name)
 
-        summary_df = pd.DataFrame(summary_rows)
-        summary_df.to_excel(writer, index=False, sheet_name="Summary")
-        writer._save()
 
-        st.success("✅ Excel generated!")
+        st.success("Excel generated!")
         st.download_button(
-            label="📥 Download Excel file",
+            label="Download Excel file",
             data=output.getvalue(),
             file_name="All_Customers_Personal_Obligations.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
