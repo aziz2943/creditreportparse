@@ -3,9 +3,10 @@ import pandas as pd
 import re
 from PyPDF2 import PdfReader
 from io import BytesIO
+from datetime import datetime
 
-st.set_page_config(page_title="PDF Loan Parser", layout="centered")
-st.title("Personal CIBIL to CAM converter")
+st.set_page_config(page_title="PDF Loan Parser", layout="wide")
+st.title("📑 Combined Corporate & Personal Obligations Extractor")
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDF credit reports",
@@ -13,146 +14,199 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
+summary_rows = []
+all_corporate_rows = []
+all_personal_dfs = {}
+
 if uploaded_files:
-    applicant_types = {}
-    st.write("### Select Borrower Type for each PDF")
-    for uploaded_file in uploaded_files:
-        label = f"{uploaded_file.name} - Borrower Type"
-        applicant_types[uploaded_file.name] = st.radio(
-            label, ["Applicant", "Co-Applicant"], key=uploaded_file.name
-        )
+    for uploaded in uploaded_files:
+        file_bytes = uploaded.read()
+        reader = PdfReader(BytesIO(file_bytes))
+        full_text = "".join([page.extract_text() + "\n" for page in reader.pages])
 
-    if st.button("Parse & Generate Excel"):
-        output = BytesIO()
-        writer = pd.ExcelWriter(output, engine="openpyxl")
-        summary_rows = []
+        if 'COMMERCIAL CREDIT INFORMATION REPORT' in full_text:
+            # ---------------------------
+            # COMMERCIAL
+            # ---------------------------
+            customer_name = st.text_input(f"Enter corporate name for '{uploaded.name}'", key=uploaded.name)
+            app_type = "Applicant"
 
-        for uploaded_file in uploaded_files:
-            file_name = uploaded_file.name
-            app_type = applicant_types[file_name]
+            cmr = re.search(r'CMR-\s*([\d,]+)', full_text)
+            cmr_score = cmr.group(1) if cmr else "None"
 
-            reader = PdfReader(uploaded_file)
-            full_text = ""
-            for page in reader.pages:
-                full_text += page.extract_text() + "\n"
+            summary_rows.append({
+                'Name': customer_name,
+                'Score': cmr_score,
+                'Type': app_type
+            })
+
+            matches = re.findall(r'Credit Facility Details(.*?)Overdue Details', full_text, re.DOTALL)
+
+            def parse_corporate(data_str):
+                patterns = {
+                    'TYPE': r'Type:\s*(.+)',
+                    'OPENED': r'Sanctioned:\s*(\d{2}-[A-Za-z]{3}-\d{4})',
+                    'SANCTIONED': r'Sanctioned INR:\s*([\d,]+)',
+                    'CURRENT BALANCE': r'Outstanding Balance:\s*(-?[\d,]+)',
+                    'EMI': r'Installment Amount:\s*([\d,]+)',
+                    'REPAYMENT TENURE': r'Repayment Tenure:\s*(\d+)',
+                    'OVERDUE': r'Overdue:\s*(-?[\d,]+)'
+                }
+                extracted = {}
+                for key, pattern in patterns.items():
+                    match = re.search(pattern, data_str, re.IGNORECASE)
+                    extracted[key] = match.group(1).strip() if match else ''
+                return extracted
+
+            def corporate_row(parsed, sr_no):
+                sanction_date_str = parsed.get('OPENED', '')
+                formatted_date = ''
+                if sanction_date_str:
+                    try:
+                        date_obj = datetime.strptime(sanction_date_str, "%d-%b-%Y")
+                        formatted_date = date_obj.strftime("%d/%m/%Y")
+                    except ValueError:
+                        formatted_date = sanction_date_str
+
+                return {
+                    'Sr. No.': sr_no,
+                    'Borrower type': app_type,
+                    'Borrower': customer_name,
+                    'Type of loan': parsed.get('TYPE', ''),
+                    'Financiers': '',
+                    'Sanction date (DD/MM/YYYY)': formatted_date,
+                    'Seasoning': '',
+                    'Sanction amount (INR)/ CC outstanding Amount': parsed.get('SANCTIONED', ''),
+                    'Monthly EMI (INR)': parsed.get('EMI', ''),
+                    'Current outstanding (INR)': parsed.get('CURRENT BALANCE', ''),
+                    'Overdue Amount': parsed.get('OVERDUE', ''),
+                    'Max DPD in L12 Months': '',
+                    'Max DPD in L36 Months': ''
+                }
+
+            rows = []
+            for i, entry in enumerate(matches, start=1):
+                parsed = parse_corporate(entry)
+                rows.append(corporate_row(parsed, i))
+            all_corporate_rows.extend(rows)
+
+        else:
+            # ---------------------------
+            # PERSONAL
+            # ---------------------------
+            app_type = st.radio(
+                f"Select type for '{uploaded.name}'",
+                ("Applicant", "Co-Applicant"),
+                key=uploaded.name + "_type"
+            )
 
             namepattern = r"CONSUMER:\s*(.+)"
             match = re.search(namepattern, full_text)
             customer_name = match.group(1).strip() if match else "Unknown"
 
-            datepattern = r"DATE:\s*(\d{2}-\d{2}-\d{4})"
-            match = re.search(datepattern, full_text)
-            customer_date = match.group(1).strip() if match else "Unknown"
-
             scorepattern = r'CREDITVISION® SCORE\s*(\d{3})'
             match = re.search(scorepattern, full_text)
-            cscore = match.group(1) if match else "None"
+            pscore = match.group(1) if match else "None"
 
             summary_rows.append({
-                "Customer Name": customer_name,
-                "Score": cscore,
-                "DATE": customer_date,
-                "Borrower Type": app_type
+                'Name': customer_name,
+                'Score': pscore,
+                'Type': app_type
             })
 
             matches = re.findall(r'STATUS(.*?)(?:ACCOUNT DATES|ENQUIRIES:)', full_text, re.DOTALL)
 
-            current_pdf_data_rows = []
+            def parse_personal(data_str):
+                patterns = {
+                    'ACCOUNT NUMBER': r'ACCOUNT NUMBER:\s*(.+)',
+                    'TYPE': r'TYPE:\s*(.+)',
+                    'OWNERSHIP': r'OWNERSHIP:\s*(.+?)(?:OPENED|\n|LAST|REPORTED|CLOSED|PMT|$)',
+                    'OPENED': r'OPENED:\s*(\d{2}-\d{2}-\d{4})',
+                    'SANCTIONED': r'SANCTIONED:\s*([\d,]+)',
+                    'CURRENT BALANCE': r'CURRENT BALANCE:\s*(-?[\d,]+)',
+                    'EMI': r'EMI:\s*([\d,]+)',
+                    'CLOSED': r'CLOSED:\s*(.+)'
+                }
+                extracted = {}
+                type_match = re.search(patterns['TYPE'], data_str, re.IGNORECASE)
+                loan_type = type_match.group(1).strip() if type_match else ''
+                extracted['TYPE'] = loan_type
 
+                if loan_type == 'CREDIT CARD':
+                    patterns['SANCTIONED'] = r'CREDIT LIMIT:\s*([\d,]+)'
+
+                for key, pattern in patterns.items():
+                    match = re.search(pattern, data_str, re.IGNORECASE)
+                    extracted[key] = match.group(1).strip() if match else ''
+                return extracted
+
+            def personal_row(parsed, sr_no, dpd12, dpd36):
+                status = "Active" if parsed.get('CLOSED', '') == '' else "Closed"
+                return {
+                    'Sr. No.': sr_no,
+                    'Borrower type': app_type,
+                    'Borrower': customer_name,
+                    'Type of loan': parsed.get('TYPE', ''),
+                    'Financiers': '',
+                    'Sanction date (DD/MM/YYYY)': parsed.get('OPENED', '').replace('-', '/'),
+                    'Seasoning': '',
+                    'Sanction amount (INR)/ CC outstanding Amount': parsed.get('SANCTIONED', ''),
+                    'Monthly EMI (INR)': parsed.get('EMI', ''),
+                    'Current outstanding (INR)': parsed.get('CURRENT BALANCE', ''),
+                    'STATUS': status,
+                    'Max DPD in L12 Months': dpd12,
+                    'Max DPD in L36 Months': dpd36,
+                    'Ownership type': parsed.get('OWNERSHIP', '')
+                }
+
+            rows = []
             for i, entry in enumerate(matches, start=1):
-                dpdmatch_entry = re.findall(r'LEFT TO RIGHT\)(.*)', entry, re.DOTALL)
-                new_dpdtext_entry = []
-                tokens = ["TransUnion CIBIL", "MEMBER ID", "MEMBER REFERENCE", "TIME:",
-                          "CONTROL NUMBER", "CONSUMER CIR", "CONSUMER:"]
+                dpd_match = re.findall(r'LEFT TO RIGHT\)(.*)', entry, re.DOTALL)
+                clean_text = []
+                tokens = ["TransUnion CIBIL", "MEMBER ID", "MEMBER REFERENCE", "TIME:", "CONTROL NUMBER", "CONSUMER CIR", "CONSUMER:"]
                 pattern_tokens = "|".join(re.escape(token) for token in tokens)
                 regex = rf"^.*(?:{pattern_tokens}).*$\n?"
-                dpd_values_entry = []
+                dpd_values = []
 
-                for dpd_item_entry in dpdmatch_entry:
-                    new_dpdtext_entry.append(
-                        re.sub(regex, "", dpd_item_entry, flags=re.IGNORECASE | re.MULTILINE)
-                    )
+                for item in dpd_match:
+                    clean_text.append(re.sub(regex, "", item, flags=re.IGNORECASE | re.MULTILINE))
 
-                for match_entry in new_dpdtext_entry:
-                    pattern_entry = re.findall(r'([0-9XSTD]{3})\s*(\d{2}-\d{2})', match_entry)
-                    for value, date in pattern_entry:
+                for t in clean_text:
+                    pattern = re.findall(r'([0-9XSTD]{3})\s*(\d{2}-\d{2})', t)
+                    for value, _ in pattern:
                         try:
                             dpd = int(value)
                         except ValueError:
                             dpd = 0
-                        dpd_values_entry.append((dpd, date))
+                        dpd_values.append(dpd)
 
-                last_12_entry = dpd_values_entry[:12]
-                max_12_months_entry = max([val for val, _ in last_12_entry], default=0)
-                max_36_months_entry = max([val for val, _ in dpd_values_entry], default=0)
-                summary_df = pd.DataFrame(summary_rows)
-                summary_df.to_excel(writer, index=False, sheet_name="Summary")
-                writer._save()
-                def parse_loan_data(data_str, customer_name):
-                    patterns = {
-                        'ACCOUNT NUMBER': r'ACCOUNT NUMBER:\s*(.+)',
-                        'TYPE': r'TYPE:\s*(.+)',
-                        'OWNERSHIP': r'OWNERSHIP:\s*(.+?)(?:OPENED|\n|LAST|REPORTED|CLOSED|PMT|$)',
-                        'OPENED': r'OPENED:\s*(\d{2}-\d{2}-\d{4})',
-                        'LAST PAYMENT': r'LAST PAYMENT:\s*(\d{2}-\d{2}-\d{4})',
-                        'REPORTED AND CERTIFIED': r'REPORTED AND CERTIFIED:\s*(\d{2}-\d{2}-\d{4})',
-                        'PMT HIST START': r'PMT HIST START:\s*(\d{2}-\d{2}-\d{4})',
-                        'PMT HIST END': r'PMT HIST END:\s*(\d{2}-\d{2}-\d{4})',
-                        'SANCTIONED': r'SANCTIONED:\s*([\d,]+)',
-                        'CURRENT BALANCE': r'CURRENT BALANCE:\s*(-?[\d,]+)',
-                        'EMI': r'EMI:\s*([\d,]+)',
-                        'REPAYMENT TENURE': r'REPAYMENT TENURE:\s*(\d+)',
-                        'CLOSED': r'CLOSED:\s*(.+)',
-                    }
-                    extracted_data = {'MEMBER NAME': customer_name}
-                    type_match = re.search(patterns['TYPE'], data_str, re.IGNORECASE)
-                    loan_type = type_match.group(1).strip() if type_match else ''
-                    extracted_data['TYPE'] = loan_type
-                    if loan_type == 'CREDIT CARD':
-                        patterns['SANCTIONED'] = r'CREDIT LIMIT:\s*([\d,]+)'
-                    for key, pattern in patterns.items():
-                        if key == 'MEMBER NAME':
-                            continue
-                        match = re.search(pattern, data_str, re.IGNORECASE)
-                        extracted_data[key] = match.group(1).strip() if match else ''
-                    return extracted_data
+                max12 = max(dpd_values[:12]) if dpd_values else 0
+                max36 = max(dpd_values) if dpd_values else 0
 
-                parsed = parse_loan_data(entry, customer_name)
+                parsed = parse_personal(entry)
+                rows.append(personal_row(parsed, i, max12, max36))
 
-                def create_loan_row(parsed_data, sr_no, customer_name, app_type, dpd12, dpd36):
-                    status = "Active" if parsed_data.get('CLOSED', '') == '' else "Closed"
-                    return {
-                        'Sr. No.': sr_no,
-                        'Borrower type': app_type,
-                        'Borrower': customer_name,
-                        'Type of loan': parsed_data.get('TYPE', ''),
-                        'Financiers': '',
-                        'Sanction date (DD/MM/YYYY)': (parsed_data.get('OPENED', '')).replace('-', '/'),
-                        'Seasoning': '',
-                        'Sanction amount (INR)/ CC outstanding Amount': parsed_data.get('SANCTIONED', ''),
-                        'Monthly EMI (INR)': parsed_data.get('EMI', ''),
-                        'Current outstanding (INR)': parsed_data.get('CURRENT BALANCE', ''),
-                        'STATUS': status,
-                        'Max DPD in L12 Months': dpd12,
-                        'Max DPD in L36 Months': dpd36,
-                        'Ownership type': parsed_data.get('OWNERSHIP', ''),
-                    }
-
-                row = create_loan_row(
-                    parsed, sr_no=len(current_pdf_data_rows) + 1, customer_name=customer_name,
-                    app_type=app_type, dpd12=max_12_months_entry, dpd36=max_36_months_entry
-                )
-                current_pdf_data_rows.append(row)
-
-            current_pdf_df = pd.DataFrame(current_pdf_data_rows)
             sheet_name = f"{customer_name}_{app_type}"[:31]
-            current_pdf_df.to_excel(writer, index=False, sheet_name=sheet_name)
+            all_personal_dfs[sheet_name] = pd.DataFrame(rows)
 
+    if st.button("Generate Excel"):
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            summary_df = pd.DataFrame(summary_rows)
+            summary_df.to_excel(writer, index=False, sheet_name="Summary")
 
-        st.success("Excel generated!")
+            if all_corporate_rows:
+                corp_df = pd.DataFrame(all_corporate_rows)
+                corp_df.to_excel(writer, index=False, sheet_name="Corporate_Entity")
+
+            for sheet_name, df in all_personal_dfs.items():
+                df.to_excel(writer, index=False, sheet_name=sheet_name)
+
+        output.seek(0)
+        st.success("✅ Excel file generated!")
         st.download_button(
-            label="Download Excel file",
-            data=output.getvalue(),
-            file_name="All_Customers_Personal_Obligations.xlsx",
+            label="📥 Download Combined_Obligations.xlsx",
+            data=output,
+            file_name="Combined_Obligations.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
