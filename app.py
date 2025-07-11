@@ -5,11 +5,25 @@ from PyPDF2 import PdfReader
 from io import BytesIO
 from datetime import datetime
 
+# ---------------- Sidebar walkthrough ----------------
+st.sidebar.title("📌 How to Use")
+st.sidebar.markdown("""
+**Step 1:** Upload one or more PDF credit reports — both corporate and personal supported.
+
+**Step 2:**  
+- For *corporate* files, enter the entity name when prompted.  
+- For *personal* files, select whether the borrower is Applicant or Co-Applicant.
+
+**Step 3:** Click **Generate Excel** when done.
+
+**Step 4:** Download your combined obligations file from the download button below!
+""")
+
 st.set_page_config(page_title="PDF Loan Parser", layout="wide")
 st.title("📑 Combined Corporate & Personal Obligations Extractor")
 
 uploaded_files = st.file_uploader(
-    "Upload one or more PDF credit reports",
+    "📂 Upload one or more PDF credit reports below",
     type="pdf",
     accept_multiple_files=True
 )
@@ -28,7 +42,7 @@ if uploaded_files:
             # ---------------------------
             # COMMERCIAL
             # ---------------------------
-            customer_name = st.text_input(f"Enter corporate name for '{uploaded.name}'", key=uploaded.name)
+            customer_name = st.text_input(f"🏢 Enter corporate name for: **{uploaded.name}**", key=uploaded.name)
             app_type = "Applicant"
 
             cmr = re.search(r'CMR-\s*([\d,]+)', full_text)
@@ -95,7 +109,7 @@ if uploaded_files:
             # PERSONAL
             # ---------------------------
             app_type = st.radio(
-                f"Select type for '{uploaded.name}'",
+                f"👤 Select borrower type for: **{uploaded.name}**",
                 ("Applicant", "Co-Applicant"),
                 key=uploaded.name + "_type"
             )
@@ -189,7 +203,7 @@ if uploaded_files:
             sheet_name = f"{customer_name}_{app_type}"[:31]
             all_personal_dfs[sheet_name] = pd.DataFrame(rows)
 
-    if st.button("Generate Excel"):
+    if st.button("✅ Generate Excel"):
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             summary_df = pd.DataFrame(summary_rows)
@@ -203,7 +217,7 @@ if uploaded_files:
                 df.to_excel(writer, index=False, sheet_name=sheet_name)
 
         output.seek(0)
-        st.success("✅ Excel file generated!")
+        st.success("🎉 Excel file generated successfully!")
         st.download_button(
             label="📥 Download Combined_Obligations.xlsx",
             data=output,
