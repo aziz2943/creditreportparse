@@ -17,6 +17,8 @@ st.sidebar.markdown("""
 **Step 3:** Click **Generate Excel** when done.
 
 **Step 4:** Download your combined obligations file from the download button below!
+
+**NOTE:** If corporate reports are uploaded,the excel will not include dpd,You will have to correspond to the pdf and enter into excel. 
 """)
 
 st.set_page_config(page_title="PDF Loan Parser", layout="wide")
