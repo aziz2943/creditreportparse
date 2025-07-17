@@ -22,7 +22,7 @@ st.sidebar.markdown("""
 """)
 
 st.set_page_config(page_title="PDF Loan Parser", layout="wide")
-st.title("📑 Combined Corporate & Personal Obligations Extractor")
+st.title("📑 Bureau Report Parser")
 
 uploaded_files = st.file_uploader(
     "📂 Upload one or more PDF credit reports below",
